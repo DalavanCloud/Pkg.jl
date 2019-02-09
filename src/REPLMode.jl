@@ -11,6 +11,8 @@ import REPL: LineEdit, REPLCompletions
 import ..devdir, ..Types.casesensitive_isdir, ..TOML
 using ..Types, ..Display, ..Operations, ..API, ..Registry
 
+const PREVIOUS_ACTIVE_PROJECT = Ref{Union{String,Nothing}}(nothing)
+
 #################
 # Git revisions #
 #################
@@ -469,11 +471,17 @@ do_up!(ctx::APIOptions, args::Vector, api_opts::APIOptions) =
     API.up(Context!(ctx), args; collect(api_opts)...)
 
 function do_activate!(args::Vector, api_opts::APIOptions)
+    global PREVIOUS_ACTIVE_PROJECT
+    temp = Base.ACTIVE_PROJECT[]
     if isempty(args)
         API.activate()
+    elseif args[1] == "-"
+        Base.ACTIVE_PROJECT[] = PREVIOUS_ACTIVE_PROJECT[]
+        API._activate_info()
     else
         API.activate(expanduser(args[1]); collect(api_opts)...)
     end
+    PREVIOUS_ACTIVE_PROJECT[] = temp
 end
 
 function do_pin!(ctx::APIOptions, args::Vector, api_opts::APIOptions)

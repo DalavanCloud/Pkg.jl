@@ -505,6 +505,10 @@ function status(ctx::Context, pkgs::Vector{PackageSpec}; mode=PKGMODE_PROJECT)
 end
 
 
+function _activate_info()
+    p = Base.active_project()
+    p === nothing || @info("activating$(ispath(p) ? "" : " new") environment at $(pathrepr(p)).")
+end
 function activate()
     Base.ACTIVE_PROJECT[] = nothing
     p = Base.active_project()
@@ -560,8 +564,7 @@ function activate(path::AbstractString; shared::Bool=false)
         end
     end
     Base.ACTIVE_PROJECT[] = Base.load_path_expand(fullpath)
-    p = Base.active_project()
-    p === nothing || @info("activating$(ispath(p) ? "" : " new") environment at $(pathrepr(p)).")
+    _activate_info()
     return nothing
 end
 
