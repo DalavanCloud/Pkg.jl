@@ -8,21 +8,22 @@ using UUIDs
 import REPL
 import REPL: LineEdit, REPLCompletions
 
-import ..devdir, ..Types.casesensitive_isdir, ..TOML
+import ..Types.casesensitive_isdir
 using ..Types, ..Display, ..Operations, ..API, ..Registry
 
+###########
+# Globals #
+###########
 const PREVIOUS_ACTIVE_PROJECT = Ref{Union{String,Nothing}}(nothing)
 
-#################
-# Git revisions #
-#################
-struct Rev
-    rev::String
-end
+#########################
+# Specification Structs #
+#########################
 
-###########
+#---------#
 # Options #
-###########
+#---------#
+const OptionDeclaration = Vector{Pair{Symbol,Any}}
 struct OptionSpec
     name::String
     short_name::Union{Nothing,String}
@@ -30,19 +31,17 @@ struct OptionSpec
     takes_arg::Bool
 end
 
-@enum(OptionClass, OPT_ARG, OPT_SWITCH)
+# TODO assert names matching lex regex
+# assert now so that you don't fail at user time
+# see function `REPLMode.APIOptions`
 function OptionSpec(;name::String,
                     short_name::Union{Nothing,String}=nothing,
                     takes_arg::Bool=false,
                     api::Pair{Symbol,<:Any})::OptionSpec
-    # TODO assert names matching lex regex
-    # assert now so that you don't fail at user time
-    # see function `REPLMode.APIOptions`
     takes_arg && @assert hasmethod(api.second, Tuple{String})
     return OptionSpec(name, short_name, api, takes_arg)
 end
 
-const OptionDeclaration = Vector{Pair{Symbol,Any}}
 function OptionSpecs(decs::Vector{OptionDeclaration})::Dict{String, OptionSpec}
     specs = Dict()
     for x in decs
@@ -57,37 +56,23 @@ function OptionSpecs(decs::Vector{OptionDeclaration})::Dict{String, OptionSpec}
     return specs
 end
 
-struct Option
-    val::String
-    argument::Union{Nothing,String}
-    Option(val::AbstractString) = new(val, nothing)
-    Option(val::AbstractString, arg::Union{Nothing,String}) = new(val, arg)
-end
-Base.show(io::IO, opt::Option) = print(io, "--$(opt.val)", opt.argument == nothing ? "" : "=$(opt.argument)")
-
-function parse_option(word::AbstractString)::Option
-    m = match(r"^(?: -([a-z]) | --([a-z]{2,})(?:\s*=\s*(\S*))? )$"ix, word)
-    m == nothing && pkgerror("malformed option: ", repr(word))
-    option_name = (m.captures[1] != nothing ? m.captures[1] : m.captures[2])
-    option_arg = (m.captures[3] == nothing ? nothing : String(m.captures[3]))
-    return Option(option_name, option_arg)
+#-----------#
+# Arguments #
+#-----------#
+struct ArgSpec
+    count::Pair
+    parser::Function
 end
 
-################
-# Command Spec #
-################
+#----------#
+# Commands #
+#----------#
 @enum(CommandKind, CMD_HELP, CMD_RM, CMD_ADD, CMD_DEVELOP, CMD_UP,
                    CMD_STATUS, CMD_TEST, CMD_GC, CMD_BUILD, CMD_PIN,
                    CMD_FREE, CMD_GENERATE, CMD_RESOLVE, CMD_PRECOMPILE,
                    CMD_INSTANTIATE, CMD_ACTIVATE, CMD_PREVIEW,
                    CMD_REGISTRY_ADD, CMD_REGISTRY_RM, CMD_REGISTRY_UP, CMD_REGISTRY_STATUS,
                    )
-@enum(ArgClass, ARG_RAW, ARG_PKG, ARG_VERSION, ARG_REV, ARG_ALL)
-struct ArgSpec
-    count::Pair
-    parser::Function
-end
-
 const CommandDeclaration = Vector{Pair{Symbol,Any}}
 struct CommandSpec
     kind::CommandKind
@@ -95,144 +80,98 @@ struct CommandSpec
     short_name::Union{Nothing,String}
     handler::Union{Nothing,Function}
     argument_spec::ArgSpec
-    option_specs::Dict{String, OptionSpec}
+    option_specs::Dict{String,OptionSpec}
     completions::Union{Nothing,Function}
     description::String
-    help::Union{Nothing, Markdown.MD}
+    help::Union{Nothing,Markdown.MD}
 end
 
-function SuperSpecs(compound_commands)::Dict{String,Dict{String,CommandSpec}}
-    super_specs = Dict()
-    for x in compound_commands
-        sub_specs = CommandSpecs(x.second)
-        name = x.first
-        @assert get(super_specs, name, nothing) === nothing # don't overwrite commands
-        super_specs[name] = sub_specs
-    end
-    return super_specs
-end
-
-function CommandSpec(;kind::Union{Nothing,CommandKind}=nothing,
-                     name::String="",
-                     short_name::Union{String,Nothing}=nothing,
-                     handler::Union{Nothing,Function}=nothing,
-                     option_spec::Vector{OptionDeclaration}=OptionDeclaration[],
-                     help::Union{Nothing, Markdown.MD}=nothing,
-                     description::String="",
-                     completions::Union{Nothing,Function}=nothing,
-                     arg_count::Pair=(0=>0),
-                     arg_parser::Function=unwrap,
+function CommandSpec(;kind::Union{Nothing,CommandKind}      = nothing,
+                     name::Union{Nothing,String}            = nothing,
+                     short_name::Union{Nothing,String}      = nothing,
+                     handler::Union{Nothing,Function}       = nothing,
+                     option_spec::Vector{OptionDeclaration} = OptionDeclaration[],
+                     help::Union{Nothing,Markdown.MD}       = nothing,
+                     description::Union{Nothing,String}     = nothing,
+                     completions::Union{Nothing,Function}   = nothing,
+                     arg_count::Pair                        = (0=>0),
+                     arg_parser::Function                   = unwrap,
                      )::CommandSpec
     @assert kind !== nothing "Register and specify a `CommandKind`"
-    @assert !isempty(name) "Supply a canonical name"
-    @assert !isempty(description) "Supply a description"
+    @assert name !== nothing "Supply a canonical name"
+    @assert description !== nothing "Supply a description"
     # TODO assert isapplicable completions dict, string
     return CommandSpec(kind, name, short_name, handler, ArgSpec(arg_count, arg_parser),
                        OptionSpecs(option_spec), completions, description, help)
 end
 
-# populate a dictionary: command_name -> command_spec
 function CommandSpecs(declarations::Vector{CommandDeclaration})::Dict{String,CommandSpec}
     specs = Dict()
     for dec in declarations
         spec = CommandSpec(;dec...)
+        @assert !haskey(specs, spec.canonical_name) "duplicate spec entry"
         specs[spec.canonical_name] = spec
-        spec.short_name !== nothing && (specs[spec.short_name] = spec)
+        if spec.short_name !== nothing
+            @assert !haskey(specs, spec.short_name) "duplicate spec entry"
+            specs[spec.short_name] = spec
+        end
     end
     return specs
 end
 
-################
-# REPL parsing #
-################
+function SuperSpecs(compound_commands)::Dict{String,Dict{String,CommandSpec}}
+    super_specs = Dict()
+    for x in compound_commands
+        name = x.first
+        spec = CommandSpecs(x.second)
+        @assert !haskey(super_specs, name) "duplicate super spec entry"
+        super_specs[name] = spec
+    end
+    return super_specs
+end
+
+###########
+# Parsing #
+###########
+
+# QString: helper struct for retaining quote information
 struct QString
     raw::String
     isquoted::Bool
 end
-
-Base.@kwdef mutable struct Statement
-    super::Union{Nothing, String}                  = nothing
-    spec::Union{Nothing, CommandSpec}              = nothing
-    options::Union{Vector{Option}, Vector{String}} = String[]
-    arguments::Vector{QString}                     = QString[]
-    preview::Bool                                  = false
-end
-
 unwrap(xs::Vector{QString}) = map(x -> x.raw, xs)
+
+#---------#
+# Options #
+#---------#
+struct Option
+    val::String
+    argument::Union{Nothing,String}
+    Option(val::AbstractString) = new(val, nothing)
+    Option(val::AbstractString, arg::Union{Nothing,String}) = new(val, arg)
+end
+Base.show(io::IO, opt::Option) = print(io, "--$(opt.val)", opt.argument == nothing ? "" : "=$(opt.argument)")
 wrap_option(option::String)  = length(option) == 1 ? "-$option" : "--$option"
 is_opt(word::AbstractString) = first(word) == '-' && word != "-"
 
-############################
-# Package/registry parsing #
-############################
-include(joinpath("REPL","argument_parsers.jl"))
-
-function tokenize(cmd::String)
-    cmd = replace(replace(cmd, "\r\n" => "; "), "\n" => "; ") # for multiline commands
-    qstrings = lex(cmd)
-    statements = foldl(qstrings; init=[QString[]]) do collection, next
-        (next.raw == ";" && !next.isquoted) ?
-            push!(collection, QString[]) :
-            push!(collection[end], next)
-        return collection
-    end
-    return statements
+function parse_option(word::AbstractString)::Option
+    m = match(r"^(?: -([a-z]) | --([a-z]{2,})(?:\s*=\s*(\S*))? )$"ix, word)
+    m === nothing && pkgerror("malformed option: ", repr(word))
+    option_name = m.captures[1] !== nothing ? m.captures[1] : m.captures[2]
+    option_arg  = m.captures[3] === nothing ? nothing : String(m.captures[3])
+    return Option(option_name, option_arg)
 end
 
-function core_parse(words::Vector{QString}; only_cmd=false)
-    # prelude
-    statement = Statement()
-    word = nothing
-    function next_word!()
-        isempty(words) && return false
-        word = popfirst!(words)
-        return true
-    end
-
-    # begin parsing
-    next_word!() || return statement, ((word === nothing) ? nothing : word.raw)
-    if word.raw == "preview"
-        statement.preview = true
-        next_word!() || return statement, word.raw
-    end
-
-    super = get(super_specs, word.raw, nothing)
-    if super !== nothing # explicit
-        statement.super = word.raw
-        next_word!() || return statement, word.raw
-        command = get(super, word.raw, nothing)
-        command !== nothing || return statement, word.raw
-    else # try implicit package
-        super = super_specs["package"]
-        command = get(super, word.raw, nothing)
-        command !== nothing || return statement, word.raw
-    end
-    statement.spec = command
-
-    only_cmd && return statement, word.raw # hack to hook in `help` command
-
-    next_word!() || return statement, word.raw
-
-    while is_opt(word.raw)
-        push!(statement.options, word.raw)
-        next_word!() || return statement, word.raw
-    end
-
-    pushfirst!(words, word)
-    statement.arguments = words
-    return statement, words[end].raw
-end
-
-function parse(input::String)
-    statements = Statement[]
-    for words in tokenize(input)
-        isempty(words) && continue
-        statement, _ = core_parse(words)
-        statement.spec === nothing && pkgerror("could not determine command")
-        statement.options = map(parse_option, statement.options)
-        push!(statements, statement)
-    end
-    return statements
+#-----------#
+# Statement #
+#-----------#
+# Statement: text-based representation of a command
+Base.@kwdef mutable struct Statement
+    super::Union{Nothing,String}                  = nothing
+    spec::Union{Nothing,CommandSpec}              = nothing
+    options::Union{Vector{Option},Vector{String}} = String[]
+    arguments::Vector{QString}                    = QString[]
+    preview::Bool                                 = false
 end
 
 function lex(cmd::String)::Vector{QString}
@@ -284,17 +223,76 @@ function lex(cmd::String)::Vector{QString}
     return filter(x->!isempty(x.raw), qstrings)
 end
 
-###########
-# Command #
-###########
-const APIOptions = Dict{Symbol, Any}
-Base.@kwdef struct Command
-    spec::Union{Nothing,CommandSpec} = nothing
-    options::APIOptions              = APIOptions()
-    arguments::Vector                = []
-    preview::Bool                    = false
+function tokenize(cmd::String)
+    cmd = replace(replace(cmd, "\r\n" => "; "), "\n" => "; ") # for multiline commands
+    qstrings = lex(cmd)
+    statements = foldl(qstrings; init=[QString[]]) do collection, next
+        (next.raw == ";" && !next.isquoted) ?
+            push!(collection, QString[]) :
+            push!(collection[end], next)
+        return collection
+    end
+    return statements
 end
 
+function core_parse(words::Vector{QString}; only_cmd=false)
+    statement = Statement()
+    word = nothing
+    function next_word!()
+        isempty(words) && return false
+        word = popfirst!(words)
+        return true
+    end
+
+    # begin parsing
+    next_word!() || return statement, ((word === nothing) ? nothing : word.raw)
+    if word.raw == "preview"
+        statement.preview = true
+        next_word!() || return statement, word.raw
+    end
+    word.raw[1]=='?' && !word.isquoted &&
+        (pushfirst!(words,QString(word.raw[2:end],false));(word=QString("?",false)))
+
+    super = get(super_specs, word.raw, nothing)
+    if super !== nothing # explicit
+        statement.super = word.raw
+        next_word!() || return statement, word.raw
+        command = get(super, word.raw, nothing)
+        command !== nothing || return statement, word.raw
+    else # try implicit package
+        super = super_specs["package"]
+        command = get(super, word.raw, nothing)
+        command !== nothing || return statement, word.raw
+    end
+    statement.spec = command
+
+    only_cmd && return statement, word.raw # hack to hook in `help` command
+
+    next_word!() || return statement, word.raw
+
+    # full option parsing is delayed so that the completions parser can use the raw string
+    while is_opt(word.raw)
+        push!(statement.options, word.raw)
+        next_word!() || return statement, word.raw
+    end
+
+    pushfirst!(words, word)
+    statement.arguments = words
+    return statement, words[end].raw
+end
+
+parse(input::String) =
+    map(Base.Iterators.filter(!isempty, tokenize(input))) do words
+        statement, _ = core_parse(words)
+        statement.spec === nothing && pkgerror("Could not determine command")
+        statement.options = map(parse_option, statement.options)
+        statement
+    end
+
+#------------#
+# APIOptions #
+#------------#
+const APIOptions = Dict{Symbol, Any}
 function APIOptions(options::Vector{Option},
                     specs::Dict{String, OptionSpec},
                     )::APIOptions
@@ -307,11 +305,21 @@ function APIOptions(options::Vector{Option},
     end
     return api_options
 end
+Context!(ctx::APIOptions)::Context = Types.Context!(collect(ctx))
+
+#---------#
+# Command #
+#---------#
+Base.@kwdef struct Command
+    spec::Union{Nothing,CommandSpec} = nothing
+    options::APIOptions              = APIOptions()
+    arguments::Vector                = []
+    preview::Bool                    = false
+end
 
 function enforce_option(option::Option, specs::Dict{String,OptionSpec})
     spec = get(specs, option.val, nothing)
-    spec !== nothing ||
-        pkgerror("option '$(option.val)' is not a valid option")
+    spec !== nothing || pkgerror("option '$(option.val)' is not a valid option")
     if spec.takes_arg
         option.argument !== nothing ||
             pkgerror("option '$(option.val)' expects an argument, but no argument given")
@@ -351,20 +359,18 @@ Final parsing (and checking) step.
 This step is distinct from `parse` in that it relies on the command specifications.
 """
 function Command(statement::Statement)::Command
-    arg_spec = statement.spec.argument_spec
-    opt_spec = statement.spec.option_specs
     # arguments
+    arg_spec = statement.spec.argument_spec
     arguments = arg_spec.parser(statement.arguments)
     if !(arg_spec.count.first <= length(arguments) <= arg_spec.count.second)
         pkgerror("Wrong number of arguments")
     end
     # options
+    opt_spec = statement.spec.option_specs
     enforce_option(statement.options, opt_spec)
     options = APIOptions(statement.options, opt_spec)
     return Command(statement.spec, options, arguments, statement.preview)
 end
-
-Context!(ctx::APIOptions)::Context = Types.Context!(collect(ctx))
 
 #############
 # Execution #
@@ -373,7 +379,9 @@ function do_cmd(repl::REPL.AbstractREPL, input::String; do_rethrow=false)
     try
         statements = parse(input)
         commands   = map(Command, statements)
-        foreach(cmd -> do_cmd!(cmd, repl), commands)
+        for command in commands
+            do_cmd!(command, repl)
+        end
     catch err
         do_rethrow && rethrow()
         if err isa PkgError || err isa ResolverError
@@ -388,9 +396,7 @@ function do_cmd!(command::Command, repl)
     context = Dict{Symbol,Any}(:preview => command.preview)
 
     # REPL specific commands
-    if command.spec.kind == CMD_HELP
-        return Base.invokelatest(do_help!, command, repl)
-    end
+    command.spec.kind == CMD_HELP && return Base.invokelatest(do_help!, command, repl)
 
     # API commands
     # TODO is invokelatest still needed?
@@ -433,6 +439,30 @@ function do_help!(command::Command, repl::REPL.AbstractREPL)
     Base.display(disp, help_md)
 end
 
+function do_activate!(args::Vector, api_opts::APIOptions)
+    global PREVIOUS_ACTIVE_PROJECT
+    temp = Base.ACTIVE_PROJECT[]
+    if isempty(args)
+        API.activate()
+    else
+        x = args[1]
+        if x == "-"
+            Base.ACTIVE_PROJECT[] = PREVIOUS_ACTIVE_PROJECT[]
+            API._activate_info()
+        elseif x[1] == '+'
+            API.activate(joinpath(dirname(Types.find_project_file()), x[2:end]);
+                         collect(api_opts)...)
+        elseif x[1] == '@'
+            api_opts[:shared] = true
+            API.activate(x[2:end]; collect(api_opts)...)
+        else
+            API.activate(expanduser(x); collect(api_opts)...)
+        end
+    end
+    PREVIOUS_ACTIVE_PROJECT[] = temp
+end
+
+
 # TODO set default Display.status keyword: mode = PKGMODE_COMBINED
 do_status!(ctx::APIOptions, args::Vector, api_opts::APIOptions) =
     API.status(Context!(ctx), args, mode=get(api_opts, :mode, PKGMODE_COMBINED))
@@ -470,29 +500,6 @@ do_free!(ctx::APIOptions, args::Vector, api_opts::APIOptions) =
 do_up!(ctx::APIOptions, args::Vector, api_opts::APIOptions) =
     API.up(Context!(ctx), args; collect(api_opts)...)
 
-function do_activate!(args::Vector, api_opts::APIOptions)
-    global PREVIOUS_ACTIVE_PROJECT
-    temp = Base.ACTIVE_PROJECT[]
-    if isempty(args)
-        API.activate()
-    else
-        x = args[1]
-        if x == "-"
-            Base.ACTIVE_PROJECT[] = PREVIOUS_ACTIVE_PROJECT[]
-            API._activate_info()
-        elseif x[1] == '+'
-            API.activate(joinpath(dirname(Types.find_project_file()), x[2:end]);
-                         collect(api_opts)...)
-        elseif x[1] == '@'
-            api_opts[:shared] = true
-            API.activate(x[2:end]; collect(api_opts)...)
-        else
-            API.activate(expanduser(x); collect(api_opts)...)
-        end
-    end
-    PREVIOUS_ACTIVE_PROJECT[] = temp
-end
-
 function do_pin!(ctx::APIOptions, args::Vector, api_opts::APIOptions)
     for arg in args
         # TODO not sure this is correct
@@ -519,15 +526,13 @@ function do_registry_rm!(ctx::APIOptions, args::Vector, api_opts::APIOptions)
 end
 
 function do_registry_up!(ctx::APIOptions, args::Vector, api_opts::APIOptions)
-    if isempty(args)
-        return Registry.update(Context!(ctx))
-    else
-        return Registry.update(Context!(ctx), args)
-    end
+    isempty(args) ?
+        Registry.update(Context!(ctx)) :
+        Registry.update(Context!(ctx), args)
 end
 
 function do_registry_status!(#=ctx::APIOptions,=# args::Vector, api_opts::APIOptions)
-    return Registry.status()
+    Registry.status()
 end
 
 ######################
@@ -546,7 +551,6 @@ function MiniREPL()
 end
 REPL.REPLDisplay(repl::MiniREPL) = repl.display
 
-
 const minirepl = Ref{MiniREPL}()
 
 __init__() = minirepl[] = MiniREPL()
@@ -564,198 +568,6 @@ function LineEdit.complete_line(c::PkgCompletionProvider, s)
     full = LineEdit.input_string(s)
     ret, range, should_complete = completions(full, lastindex(partial))
     return ret, partial[range], should_complete
-end
-
-#######################
-# COMMAND COMPLETIONS #
-#######################
-function complete_activate(options, partial, i1, i2)
-    possible = String[]
-    shared = get(options, :shared, false)
-    if shared
-        for depot in Base.DEPOT_PATH
-            envdir = joinpath(depot, "environments")
-            isdir(envdir) || continue
-            append!(possible, readdir(envdir))
-        end
-        return possible
-    else
-        return complete_local_dir(partial, i1, i2)
-    end
-end
-
-function complete_local_dir(s, i1, i2)
-    if !isempty(s) && s[1] == '~'
-        return String[expanduser(s)], i1:i2, true
-    end
-
-    cmp = REPL.REPLCompletions.complete_path(s, i2)
-    completions = [REPL.REPLCompletions.completion_text(p) for p in cmp[1]]
-    completions = filter!(x -> isdir(s[1:prevind(s, first(cmp[2])-i1+1)]*x), completions)
-    return completions, cmp[2], !isempty(completions)
-end
-
-function complete_remote_package(partial)
-    cmp = String[]
-    julia_version = VERSION
-    for reg in Types.collect_registries()
-        data = Types.read_registry(joinpath(reg.path, "Registry.toml"))
-        for (uuid, pkginfo) in data["packages"]
-            name = pkginfo["name"]
-            if startswith(name, partial)
-                compat_data = Operations.load_package_data_raw(
-                    VersionSpec, joinpath(reg.path, pkginfo["path"], "Compat.toml"))
-                supported_julia_versions = VersionSpec(VersionRange[])
-                for (ver_range, compats) in compat_data
-                    for (compat, v) in compats
-                        if compat == "julia"
-                            union!(supported_julia_versions, VersionSpec(v))
-                        end
-                    end
-                end
-                if VERSION in supported_julia_versions
-                    push!(cmp, name)
-                end
-            end
-        end
-    end
-    return cmp
-end
-
-function canonical_names()
-    # add "package" commands
-    xs = [(spec.canonical_name => spec) for spec in unique(values(super_specs["package"]))]
-    sort!(xs, by=first)
-    # add other super commands, e.g. "registry"
-    for (super, specs) in super_specs
-        super != "package" || continue # skip "package"
-        temp = [(join([super, spec.canonical_name], " ") => spec) for spec in unique(values(specs))]
-        append!(xs, sort!(temp, by=first))
-    end
-    return xs
-end
-
-function complete_help(options, partial)
-    names = String[]
-    for cmds in values(super_specs)
-         append!(names, [spec.canonical_name for spec in values(cmds)])
-    end
-    return sort!(unique!(append!(names, collect(keys(super_specs)))))
-end
-
-function complete_installed_packages(options, partial)
-    env = try EnvCache()
-    catch err
-        err isa PkgError || rethrow()
-        return String[]
-    end
-    mode = get(options, :mode, PKGMODE_PROJECT)
-    return mode == PKGMODE_PROJECT ?
-        collect(keys(env.project.deps)) :
-        unique!([entry.name for (uuid, entry) in env.manifest])
-end
-
-function complete_add_dev(options, partial, i1, i2)
-    comps, idx, _ = complete_local_dir(partial, i1, i2)
-    if occursin(Base.Filesystem.path_separator_re, partial)
-        return comps, idx, !isempty(comps)
-    end
-    comps = vcat(comps, complete_remote_package(partial))
-    comps = vcat(comps, filter(x->startswith(x,partial) && !(x in comps),
-                               collect(values(Types.stdlib()))))
-    return comps, idx, !isempty(comps)
-end
-
-function default_commands()
-    names = collect(keys(super_specs))
-    append!(names, map(x -> getproperty(x, :canonical_name), values(super_specs["package"])))
-    return sort(unique(names))
-end
-
-########################
-# COMPLETION INTERFACE #
-########################
-function complete_command(statement::Statement, final::Bool, on_sub::Bool)
-    if statement.super !== nothing
-        if (!on_sub && final) || (on_sub && !final)
-            # last thing determined was the super -> complete canonical names of subcommands
-            specs = super_specs[statement.super]
-            names = map(x -> getproperty(x, :canonical_name), values(specs))
-            return sort(unique(names))
-        end
-    end
-    # complete default names
-    return default_commands()
-end
-
-complete_opt(opt_specs) =
-    unique(sort(map(wrap_option,
-                    map(x -> getproperty(x, :name),
-                        collect(values(opt_specs))))))
-
-function complete_argument(spec::CommandSpec,
-                           options::Vector{String},
-                           partial::AbstractString,
-                           offset::Int,
-                           index::Int,
-                           )
-    if spec.completions === nothing
-        return String[]
-    end
-    # finish parsing opts
-    opts = APIOptions(map(parse_option, options), spec.option_specs)
-    if applicable(spec.completions, opts, partial, offset, index)
-        return spec.completions(opts, partial, offset, index)
-    end
-    return spec.completions(opts, partial)
-end
-
-function _completions(input, final, offset, index)
-    words = tokenize(input)[end]
-    word_count = length(words)
-    statement, partial = core_parse(words)
-    final && (partial = "") # last token is finalized -> no partial
-    # number of tokens which specify the command
-    command_size = count([statement.preview, statement.super !== nothing, true])
-    command_is_focused() = !((word_count == command_size && final) || word_count > command_size)
-
-    if statement.spec === nothing # spec not determined -> complete command
-        !command_is_focused() && return String[], 0:-1, false
-        x = complete_command(statement, final, word_count == (statement.preview ? 3 : 2))
-    else
-        command_is_focused() && return String[], 0:-1, false
-
-        if final # complete arg by default
-            x = complete_argument(statement.spec, statement.options, partial, offset, index)
-        else # complete arg or opt depending on last token
-            x = is_opt(partial) ?
-                complete_opt(statement.spec.option_specs) :
-                complete_argument(statement.spec, statement.options, partial, offset, index)
-        end
-    end
-
-    # In the case where the completion function wants to deal with indices, it will return a fully
-    # computed completion tuple, just return it
-    # Else, the completions function will just deal with strings and will return a Vector{String}
-    if isa(x, Tuple)
-        return x
-    else
-        possible = filter(possible -> startswith(possible, partial), x)
-        return possible, offset:index, !isempty(possible)
-    end
-end
-
-function completions(full, index)::Tuple{Vector{String},UnitRange{Int},Bool}
-    pre = full[1:index]
-    # empty input -> complete commands
-    if isempty(pre)
-        return default_commands(), 0:-1, false
-    end
-    # parse input
-    last = split(pre, ' ', keepempty=true)[end]
-    offset = isempty(last) ? index+1 : last.offset+1
-    final = isempty(last) # is the cursor still attached to the final token?
-    return _completions(pre, final, offset, index)
 end
 
 prev_project_file = nothing
@@ -781,11 +593,7 @@ function promptf()
             end
             if project !== nothing
                 projname = project.name
-                if projname !== nothing
-                    name = projname
-                else
-                    name = basename(dirname(project_file))
-                end
+                name = projname !== nothing ? projname : basename(dirname(project_file))
                 prefix = string("(", name, ") ")
                 prev_prefix = prefix
                 prev_project_timestamp = mtime(project_file)
@@ -876,8 +684,26 @@ end
 ########
 # SPEC #
 ########
+include(joinpath("REPL", "completions.jl"))
+include(joinpath("REPL", "argument_parsers.jl"))
 include(joinpath("REPL", "command_declarations.jl"))
 super_specs = SuperSpecs(command_declarations)
+
+########
+# HELP #
+########
+function canonical_names()
+    # add "package" commands
+    xs = [(spec.canonical_name => spec) for spec in unique(values(super_specs["package"]))]
+    sort!(xs, by=first)
+    # add other super commands, e.g. "registry"
+    for (super, specs) in super_specs
+        super != "package" || continue # skip "package"
+        temp = [(join([super, spec.canonical_name], " ") => spec) for spec in unique(values(specs))]
+        append!(xs, sort!(temp, by=first))
+    end
+    return xs
+end
 
 function gen_help()
     help = md"""

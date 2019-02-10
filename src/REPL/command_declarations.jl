@@ -232,7 +232,7 @@ Use the special argument `-` to jump back to the previous active environment.
     :arg_count => 0 => Inf,
     :arg_parser => (x -> parse_package(x; valid=[VersionRange])),
     :option_spec => OptionDeclaration[
-        [:name => "project", :short_name => "p", :api => :mode => PKGMODE_PROJECT],
+        [:name => "project",  :short_name => "p", :api => :mode => PKGMODE_PROJECT],
         [:name => "manifest", :short_name => "m", :api => :mode => PKGMODE_MANIFEST],
         [:name => "major", :api => :level => UPLEVEL_MAJOR],
         [:name => "minor", :api => :level => UPLEVEL_MINOR],
@@ -283,9 +283,9 @@ The `startup.jl` file is disabled during precompilation unless julia is started 
     :short_name => "st",
     :handler => do_status!,
     :arg_count => 0 => Inf,
-    :arg_parser => (x -> parse_package(x)),
+    :arg_parser => parse_package,
     :option_spec => OptionDeclaration[
-        [:name => "project", :short_name => "p", :api => :mode => PKGMODE_PROJECT],
+        [:name => "project",  :short_name => "p", :api => :mode => PKGMODE_PROJECT],
         [:name => "manifest", :short_name => "m", :api => :mode => PKGMODE_MANIFEST],
     ],
     :completions => complete_installed_packages,

@@ -11,6 +11,9 @@ function parse_package(args::Vector{QString}; valid=[], add_or_dev=false)::Vecto
     return parse_package_args(args; add_or_dev=add_or_dev)
 end
 
+struct Rev
+    rev::String
+end
 const PackageIdentifier = String
 const PackageToken = Union{PackageIdentifier, VersionRange, Rev}
 
