@@ -483,6 +483,9 @@ function do_activate!(args::Vector, api_opts::APIOptions)
         elseif x[1] == '+'
             API.activate(joinpath(dirname(Types.find_project_file()), x[2:end]);
                          collect(api_opts)...)
+        elseif x[1] == '@'
+            api_opts[:shared] = true
+            API.activate(x[2:end]; collect(api_opts)...)
         else
             API.activate(expanduser(x); collect(api_opts)...)
         end

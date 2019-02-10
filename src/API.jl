@@ -547,21 +547,17 @@ function activate(path::AbstractString; shared::Bool=false)
             end
         end
     else
+        !isempty(path) || pkgerror("Not a valid name for a shared environment")
         # initialize `fullpath` in case of empty `Pkg.depots()`
         fullpath = ""
-        # loop over all depots to check if the shared environment already exists
         for depot in Pkg.depots()
             fullpath = joinpath(Pkg.envdir(depot), path)
             isdir(fullpath) && break
         end
+        isdir(fullpath) || (fullpath = joinpath(Pkg.envdir(Pkg.depots1()), path))
         # this disallows names such as "Foo/bar", ".", "..", etc
-        if basename(abspath(fullpath)) != path
-            pkgerror("not a valid name for a shared environment: $(path)")
-        end
-        # unless the shared environment already exists, place it in the first depots
-        if !isdir(fullpath)
-            fullpath = joinpath(Pkg.envdir(Pkg.depots1()), path)
-        end
+        basename(abspath(fullpath)) == path ||
+            pkgerror("Not a valid name for a shared environment: `$path`")
     end
     Base.ACTIVE_PROJECT[] = Base.load_path_expand(fullpath)
     _activate_info()
