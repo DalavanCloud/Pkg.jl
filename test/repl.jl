@@ -589,6 +589,11 @@ end
     @test_throws PkgError Pkg.REPLMode.parse_package_identifier(path)
 end end
 
+@testset "parse package url win" begin
+    @test typeof(Pkg.REPLMode.parse_package_identifier("https://github.com/abc/ABC.jl";
+                                                       add_or_develop=true)) == Pkg.Types.PackageSpec
+end
+
 @testset "unit test for REPLMode.promptf" begin
     function set_name(projfile_path, newname)
         sleep(1.1)
@@ -917,6 +922,27 @@ end
         @test_throws PkgError pkg"test Example#foo"
         @test_throws PkgError pkg"test Example@v0.0.1"
     end end end
+end
+
+@testset "Env navigation" begin
+    temp_pkg_dir() do project_path; mktempdir() do tmp
+        mkdir(joinpath(tmp, "test"))
+        Pkg.activate(tmp)
+        Pkg.add("Random")
+        pkg"activate +test"
+        Pkg.add("Example")
+        pkg"activate -"
+        @test Pkg.Types.Context().env.project.deps ==
+            Dict("Random" => UUID("9a3f8284-a2c9-5f02-9a11-845980a1fd5c"))
+        Pkg.activate(joinpath(tmp, "test"))
+        @test Pkg.Types.Context().env.project.deps ==
+            Dict("Example" => UUID("7876af07-990d-54b4-ab0e-23690620f79a"))
+        pkg"activate @foo"
+        Pkg.add("Example")
+        Pkg.activate(joinpath(Pkg.envdir(), "foo"))
+        @test Pkg.Types.Context().env.project.deps ==
+            Dict("Example" => UUID("7876af07-990d-54b4-ab0e-23690620f79a"))
+    end end
 end
 
 end # module
