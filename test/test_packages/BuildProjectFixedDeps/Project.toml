@@ -1,6 +1,5 @@
 name = "BuildProjectFixedDeps"
 uuid = "a9d53770-2f9b-11e9-234d-75f2cd7ebf28"
-authors = ["Kristoffer Carlsson <kcarlsson89@gmail.com>"]
 version = "0.1.0"
 
 [deps]
