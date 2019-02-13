@@ -688,7 +688,7 @@ end
     end end
 end
 
-@testset "building project should fix version of deps"
+@testset "building project should fix version of deps" begin
     temp_pkg_dir() do project_path
         dep_pkg = joinpath(@__DIR__, "test_packages", "BuildProjectFixedDeps")
         Pkg.activate(dep_pkg)
